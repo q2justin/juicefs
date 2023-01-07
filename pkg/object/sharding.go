@@ -190,17 +190,52 @@ func (s *sharded) CompleteUpload(key string, uploadID string, parts []*Part) err
 	return s.pick(key).CompleteUpload(key, uploadID, parts)
 }
 
+func HasDuplicates(endpoints []string) bool {
+	lenEndpoints := len(endpoints)
+	for currentIndex := 0; currentIndex < lenEndpoints; currentIndex++ {
+		for checkIndex := 0; checkIndex < lenEndpoints; checkIndex++ {
+			if currentIndex != checkIndex {
+				if endpoints[currentIndex] == endpoints[checkIndex] {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func NewSharded(name, endpoint, ak, sk, token string, shards int) (ObjectStorage, error) {
 	stores := make([]ObjectStorage, shards)
 	var err error
-	for i := range stores {
-		ep := fmt.Sprintf(endpoint, i)
-		if strings.HasSuffix(ep, "%!(EXTRA int=0)") {
-			return nil, fmt.Errorf("can not generate different endpoint using %s", endpoint)
+	if strings.Contains(endpoint, "%d") && (!strings.Contains(endpoint, ",") && !strings.Contains(endpoint, ";")) {
+		for i := range stores {
+			ep := fmt.Sprintf(endpoint, i)
+			if strings.HasSuffix(ep, "%!(EXTRA int=0)") {
+				return nil, fmt.Errorf("can not generate different endpoint using %s", endpoint)
+			}
+			stores[i], err = CreateStorage(name, ep, ak, sk, token)
+			if err != nil {
+				return nil, err
+			}
 		}
-		stores[i], err = CreateStorage(name, ep, ak, sk, token)
-		if err != nil {
-			return nil, err
+	} else if strings.Contains(endpoint, ",") || strings.Contains(endpoint, ";") {
+		seperator := ","
+		if !strings.Contains(endpoint, ",") && strings.Contains(endpoint, ";") {
+			seperator = ";"
+		}
+		endpoints := strings.Split(endpoint, seperator)
+		if len(endpoints) < len(stores) {
+			return nil, fmt.Errorf("requested more shards then provided endpoints")
+		}
+		if HasDuplicates(endpoints) {
+			return nil, fmt.Errorf("there are duplicates in the bucket endpoint list")
+		}
+		for i := range stores {
+			ep := endpoints[i]
+			stores[i], err = CreateStorage(name, ep, ak, sk, token)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return &sharded{stores: stores}, nil
