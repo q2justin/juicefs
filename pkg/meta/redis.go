@@ -798,7 +798,7 @@ func (m *redisMeta) Truncate(ctx Context, inode Ino, flags uint8, length uint64,
 		f.Lock()
 		defer f.Unlock()
 	}
-	defer func() { m.of.InvalidateChunk(inode, 0xFFFFFFFF) }()
+	defer func() { m.of.InvalidateChunk(inode, invalidateAllChunks) }()
 	var newSpace int64
 	err := m.txn(ctx, func(tx *redis.Tx) error {
 		newSpace = 0
@@ -913,7 +913,7 @@ func (m *redisMeta) Fallocate(ctx Context, inode Ino, mode uint8, off uint64, si
 		f.Lock()
 		defer f.Unlock()
 	}
-	defer func() { m.of.InvalidateChunk(inode, 0xFFFFFFFF) }()
+	defer func() { m.of.InvalidateChunk(inode, invalidateAllChunks) }()
 	var newSpace int64
 	err := m.txn(ctx, func(tx *redis.Tx) error {
 		newSpace = 0
@@ -986,7 +986,7 @@ func (m *redisMeta) Fallocate(ctx Context, inode Ino, mode uint8, off uint64, si
 func (m *redisMeta) SetAttr(ctx Context, inode Ino, set uint16, sugidclearmode uint8, attr *Attr) syscall.Errno {
 	defer m.timeit(time.Now())
 	inode = m.checkRoot(inode)
-	defer func() { m.of.InvalidateChunk(inode, 0xFFFFFFFE) }()
+	defer func() { m.of.InvalidateChunk(inode, invalidateAttrOnly) }()
 	return errno(m.txn(ctx, func(tx *redis.Tx) error {
 		var cur Attr
 		a, err := tx.Get(ctx, m.inodeKey(inode)).Bytes()
@@ -1204,7 +1204,7 @@ func (m *redisMeta) doUnlink(ctx Context, parent Ino, name string) syscall.Errno
 		return st
 	}
 	if trash == 0 {
-		defer func() { m.of.InvalidateChunk(inode, 0xFFFFFFFE) }()
+		defer func() { m.of.InvalidateChunk(inode, invalidateAttrOnly) }()
 	}
 	var _type uint8
 	var opened bool
@@ -1551,7 +1551,7 @@ func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentD
 						if dtyp == TypeFile && tattr.Nlink == 0 {
 							opened = m.of.IsOpen(dino)
 						}
-						defer func() { m.of.InvalidateChunk(dino, 0xFFFFFFFE) }()
+						defer func() { m.of.InvalidateChunk(dino, invalidateAttrOnly) }()
 					} else if tattr.Parent > 0 {
 						tattr.Parent = trash
 					}
@@ -2061,7 +2061,7 @@ func (m *redisMeta) CopyFileRange(ctx Context, fin Ino, offIn uint64, fout Ino, 
 		defer f.Unlock()
 	}
 	var newSpace int64
-	defer func() { m.of.InvalidateChunk(fout, 0xFFFFFFFF) }()
+	defer func() { m.of.InvalidateChunk(fout, invalidateAllChunks) }()
 	err := m.txn(ctx, func(tx *redis.Tx) error {
 		newSpace = 0
 		rs, err := tx.MGet(ctx, m.inodeKey(fin), m.inodeKey(fout)).Result()
@@ -2810,7 +2810,7 @@ func (m *redisMeta) ListSlices(ctx Context, slices map[Ino][]Slice, delete bool,
 		return errno(err)
 	}
 
-	return errno(m.scanDeletedSlices(ctx, func(ss []Slice, _ int64) (bool, error) {
+	return errno(m.scanTrashSlices(ctx, func(ss []Slice, _ int64) (bool, error) {
 		slices[1] = append(slices[1], ss...)
 		if showProgress != nil {
 			for range ss {
@@ -2821,7 +2821,7 @@ func (m *redisMeta) ListSlices(ctx Context, slices map[Ino][]Slice, delete bool,
 	}))
 }
 
-func (m *redisMeta) scanDeletedSlices(ctx Context, scan deletedSliceScan) error {
+func (m *redisMeta) scanTrashSlices(ctx Context, scan trashSliceScan) error {
 	if scan == nil {
 		return nil
 	}
@@ -2893,7 +2893,60 @@ func (m *redisMeta) scanDeletedSlices(ctx Context, scan deletedSliceScan) error 
 	return nil
 }
 
-func (m *redisMeta) scanDeletedFiles(ctx Context, scan deletedFileScan) error {
+func (m *redisMeta) scanPendingSlices(ctx Context, scan pendingSliceScan) error {
+	if scan == nil {
+		return nil
+	}
+
+	pendingKeys := make(chan string, 1000)
+	c, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		_ = m.hscan(c, m.sliceRefs(), func(keys []string) error {
+			for i := 0; i < len(keys); i += 2 {
+				val := keys[i+1]
+				refs, err := strconv.ParseInt(val, 10, 64)
+				if err != nil {
+					// ignored
+					logger.Warn(errors.Wrapf(err, "parse slice ref: %s", val))
+					return nil
+				}
+				if refs < 0 {
+					pendingKeys <- keys[i]
+				}
+			}
+			return nil
+		})
+		close(pendingKeys)
+	}()
+
+	for key := range pendingKeys {
+		ps := strings.Split(key[1:], "_")
+		if len(ps) != 2 {
+			return fmt.Errorf("invalid key %s", key)
+		}
+		id, err := strconv.ParseUint(ps[0], 10, 64)
+		if err != nil {
+			return errors.Wrapf(err, "invalid key %s, fail to parse id", key)
+		}
+		size, err := strconv.ParseUint(ps[1], 10, 64)
+		if err != nil {
+			return errors.Wrapf(err, "invalid key %s, fail to parse size", key)
+		}
+		clean, err := scan(id, uint32(size))
+		if err != nil {
+			return errors.Wrap(err, "scan pending slices")
+		}
+		if clean {
+			// TODO: m.deleteSlice(id, uint32(size))
+			// avoid lint warning
+			_ = clean
+		}
+	}
+	return nil
+}
+
+func (m *redisMeta) scanPendingFiles(ctx Context, scan pendingFileScan) error {
 	if scan == nil {
 		return nil
 	}

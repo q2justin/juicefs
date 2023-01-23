@@ -270,7 +270,7 @@ type Meta interface {
 	// ListSessions returns all client sessions.
 	ListSessions() ([]*Session, error)
 	// ScanDeletedObject scan deleted objects by customized scanner.
-	ScanDeletedObject(Context, deletedSliceScan, deletedFileScan) error
+	ScanDeletedObject(Context, trashSliceScan, pendingSliceScan, trashFileScan, pendingFileScan) error
 	// ListLocks returns all locks of a inode.
 	ListLocks(ctx context.Context, inode Ino) ([]PLockItem, []FLockItem, error)
 	// CleanStaleSessions cleans up sessions not active for more than 5 minutes
@@ -363,6 +363,8 @@ type Meta interface {
 	Check(ctx Context, fpath string, repair bool, recursive bool) syscall.Errno
 	// Change root to a directory specified by subdir
 	Chroot(ctx Context, subdir string) syscall.Errno
+	// Get a copy of the current format
+	GetFormat() Format
 
 	// OnMsg add a callback for the given message type.
 	OnMsg(mtype uint32, cb MsgCallback)
