@@ -19,7 +19,6 @@ require (
 	github.com/colinmarc/hdfs/v2 v2.3.0
 	github.com/dgraph-io/badger/v3 v3.2103.2
 	github.com/erikdubbelboer/gspt v0.0.0-20210805194459-ce36a5128377
-	github.com/go-redis/redis/v8 v8.11.5
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gofrs/flock v0.8.1
 	github.com/google/btree v1.1.2
@@ -65,16 +64,18 @@ require (
 	go.etcd.io/etcd/client/v3 v3.5.2
 	go.uber.org/automaxprocs v1.5.1
 	golang.org/x/crypto v0.0.0-20220112180741-5e0467b6c7ce
-	golang.org/x/net v0.0.0-20220127200216-cd36cc0744dd
+	golang.org/x/net v0.2.0
 	golang.org/x/oauth2 v0.0.0-20211104180415-d3ed0bb246c8
-	golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8
-	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211
-	golang.org/x/text v0.3.7
+	golang.org/x/sys v0.2.0
+	golang.org/x/term v0.2.0
+	golang.org/x/text v0.4.0
 	google.golang.org/api v0.70.0
 	google.golang.org/protobuf v1.27.1
 	gopkg.in/kothar/go-backblaze.v0 v0.0.0-20210124194846-35409b867216
 	xorm.io/xorm v1.0.7
 )
+
+require github.com/go-redis/redis/v9 v9.0.0-rc.2
 
 require (
 	cloud.google.com/go v0.100.2 // indirect
@@ -128,7 +129,7 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/golang/snappy v0.0.3 // indirect
 	github.com/google/flatbuffers v1.12.1 // indirect
-	github.com/google/go-cmp v0.5.7 // indirect
+	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/go-querystring v1.0.0 // indirect
 	github.com/google/readahead v0.0.0-20161222183148-eaceba169032 // indirect
 	github.com/googleapis/gax-go/v2 v2.1.1 // indirect

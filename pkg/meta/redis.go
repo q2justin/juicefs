@@ -43,7 +43,7 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/go-redis/redis/v9"
 	"github.com/juicedata/juicefs/pkg/utils"
 )
 
@@ -153,7 +153,7 @@ func newRedisMeta(driver, addr string, conf *Config) (Meta, error) {
 		fopt.WriteTimeout = opt.WriteTimeout
 		if conf.ReadOnly {
 			// NOTE: RouteByLatency and RouteRandomly are not supported since they require cluster client
-			fopt.SlaveOnly = routeRead == "replica"
+			fopt.ReplicaOnly = routeRead == "replica"
 		}
 		rdb = redis.NewFailoverClient(&fopt)
 	} else {
@@ -285,7 +285,7 @@ func (m *redisMeta) doLoad() ([]byte, error) {
 }
 
 func (m *redisMeta) doNewSession(sinfo []byte) error {
-	err := m.rdb.ZAdd(Background, m.allSessions(), &redis.Z{
+	err := m.rdb.ZAdd(Background, m.allSessions(), redis.Z{
 		Score:  float64(m.expireTime()),
 		Member: strconv.FormatUint(m.sid, 10)}).Err()
 	if err != nil {
@@ -1299,7 +1299,7 @@ func (m *redisMeta) doUnlink(ctx Context, parent Ino, name string) syscall.Errno
 						pipe.Set(ctx, m.inodeKey(inode), m.marshal(&attr), 0)
 						pipe.SAdd(ctx, m.sustained(m.sid), strconv.Itoa(int(inode)))
 					} else {
-						pipe.ZAdd(ctx, m.delfiles(), &redis.Z{Score: float64(now.Unix()), Member: m.toDelete(inode, attr.Length)})
+						pipe.ZAdd(ctx, m.delfiles(), redis.Z{Score: float64(now.Unix()), Member: m.toDelete(inode, attr.Length)})
 						pipe.Del(ctx, m.inodeKey(inode))
 						newSpace, newInode = -align4K(attr.Length), -1
 						pipe.IncrBy(ctx, m.usedSpaceKey(), newSpace)
@@ -1630,7 +1630,7 @@ func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentD
 								pipe.Set(ctx, m.inodeKey(dino), m.marshal(&tattr), 0)
 								pipe.SAdd(ctx, m.sustained(m.sid), strconv.Itoa(int(dino)))
 							} else {
-								pipe.ZAdd(ctx, m.delfiles(), &redis.Z{Score: float64(now.Unix()), Member: m.toDelete(dino, tattr.Length)})
+								pipe.ZAdd(ctx, m.delfiles(), redis.Z{Score: float64(now.Unix()), Member: m.toDelete(dino, tattr.Length)})
 								pipe.Del(ctx, m.inodeKey(dino))
 								newSpace, newInode = -align4K(tattr.Length), -1
 								pipe.IncrBy(ctx, m.usedSpaceKey(), newSpace)
@@ -1933,7 +1933,7 @@ func (m *redisMeta) doFindStaleSessions(limit int) ([]uint64, error) {
 }
 
 func (m *redisMeta) doRefreshSession() {
-	m.rdb.ZAdd(Background, m.allSessions(), &redis.Z{
+	m.rdb.ZAdd(Background, m.allSessions(), redis.Z{
 		Score:  float64(m.expireTime()),
 		Member: strconv.FormatUint(m.sid, 10)})
 }
@@ -1951,7 +1951,7 @@ func (m *redisMeta) doDeleteSustainedInode(sid uint64, inode Ino) error {
 	m.parseAttr(a, &attr)
 	var newSpace int64
 	_, err = m.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.ZAdd(ctx, m.delfiles(), &redis.Z{Score: float64(time.Now().Unix()), Member: m.toDelete(inode, attr.Length)})
+		pipe.ZAdd(ctx, m.delfiles(), redis.Z{Score: float64(time.Now().Unix()), Member: m.toDelete(inode, attr.Length)})
 		pipe.Del(ctx, m.inodeKey(inode))
 		newSpace = -align4K(attr.Length)
 		pipe.IncrBy(ctx, m.usedSpaceKey(), newSpace)
@@ -3031,8 +3031,8 @@ func (m *redisMeta) checkServerConfig() {
 			logger.Errorf("try to reconfigure maxmemory-policy to 'noeviction' failed: %s", err)
 		} else if result, err := m.rdb.ConfigGet(Background, "maxmemory-policy").Result(); err != nil {
 			logger.Warnf("get config maxmemory-policy failed: %s", err)
-		} else if len(result) == 2 && result[1] != "noeviction" {
-			logger.Warnf("reconfigured maxmemory-policy to 'noeviction', but it's still %s", result[1])
+		} else if len(result) == 2 && result["1"] != "noeviction" {
+			logger.Warnf("reconfigured maxmemory-policy to 'noeviction', but it's still %s", result["1"])
 		} else {
 			logger.Infof("set maxmemory-policy to 'noeviction' successfully")
 		}
@@ -3059,10 +3059,10 @@ func (m *redisMeta) dumpEntries(es ...*DumpedEntry) error {
 	return m.txn(ctx, func(tx *redis.Tx) error {
 		p := tx.Pipeline()
 		var ar = make([]*redis.StringCmd, len(es))
-		var xr = make([]*redis.StringStringMapCmd, len(es))
+		var xr = make([]*redis.MapStringStringCmd, len(es))
 		var sr = make([]*redis.StringCmd, len(es))
 		var cr = make([]*redis.StringSliceCmd, len(es))
-		var dr = make([]*redis.StringStringMapCmd, len(es))
+		var dr = make([]*redis.MapStringStringCmd, len(es))
 		for i, e := range es {
 			inode := e.Attr.Inode
 			ar[i] = p.Get(ctx, m.inodeKey(inode))
@@ -3542,14 +3542,14 @@ func (m *redisMeta) LoadMeta(r io.Reader) (err error) {
 		if l > 100 {
 			l = 100
 		}
-		zs := make([]*redis.Z, 0, l)
+		zs := make([]redis.Z, 0, l)
 		for _, d := range dm.DelFiles {
 			if len(zs) >= 100 {
 				p.ZAdd(ctx, m.delfiles(), zs...)
 				tryExec()
 				zs = zs[:0]
 			}
-			zs = append(zs, &redis.Z{
+			zs = append(zs, redis.Z{
 				Score:  float64(d.Expire),
 				Member: m.toDelete(d.Inode, d.Length),
 			})
